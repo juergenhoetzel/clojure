@@ -303,7 +303,7 @@
                     m))
               m (conj (if (meta name) (meta name) {}) m)]
           (list 'def (with-meta name m)
-                (list '.withMeta (cons `fn (cons (with-meta name m) fdecl)) (list '.meta (list 'var name)))))))
+                (cons `fn fdecl) ))))
 
 (. (var defn) (setMacro))
 
@@ -3140,7 +3140,7 @@
        (number? x) (BigDecimal/valueOf (long x))
        :else (BigDecimal. x)))
 
-(def ^{:private true} print-initialized false)
+(def ^:dynamic ^{:private true} print-initialized false)
 
 (defmulti print-method (fn [x writer] (type x)))
 (defmulti print-dup (fn [x writer] (class x)))
@@ -3747,7 +3747,7 @@
      (vector? name-vals-vec) "a vector for its binding"
      (even? (count name-vals-vec)) "an even number of forms in binding vector")
   `(let [~@(interleave (take-nth 2 name-vals-vec)
-                       (repeat '(. clojure.lang.Var (create))))]
+                       (repeat '(.. clojure.lang.Var create setDynamic)))]
      (. clojure.lang.Var (pushThreadBindings (hash-map ~@name-vals-vec)))
      (try
       ~@body
@@ -5095,17 +5095,17 @@
 
 ;;;;;;;;;;; require/use/load, contributed by Stephen C. Gilardi ;;;;;;;;;;;;;;;;;;
 
-(defonce
+(defonce ^:dynamic
   ^{:private true
      :doc "A ref to a sorted set of symbols representing loaded libs"}
   *loaded-libs* (ref (sorted-set)))
 
-(defonce
+(defonce ^:dynamic
   ^{:private true
      :doc "the set of paths currently being loaded by this thread"}
   *pending-paths* #{})
 
-(defonce
+(defonce ^:dynamic
   ^{:private true :doc
      "True while a verbose load is pending"}
   *loading-verbosely* false)
@@ -5465,22 +5465,22 @@
    :static true}
   [coll] (instance? clojure.lang.Reversible coll))
 
-(def
+(def ^:dynamic
  ^{:doc "bound in a repl thread to the most recent value printed"
    :added "1.0"}
  *1)
 
-(def
+(def ^:dynamic
  ^{:doc "bound in a repl thread to the second most recent value printed"
    :added "1.0"}
  *2)
 
-(def
+(def ^:dynamic
  ^{:doc "bound in a repl thread to the third most recent value printed"
    :added "1.0"}
  *3)
 
-(def
+(def ^:dynamic
  ^{:doc "bound in a repl thread to the most recent exception caught by the repl"
    :added "1.0"}
  *e)
@@ -5831,14 +5831,10 @@
   {:added "1.0"}
   ([f & opts]
      (let [opts (normalize-slurp-opts opts)
-           sb (StringBuilder.)]
+           sw (java.io.StringWriter.)]
        (with-open [#^java.io.Reader r (apply jio/reader f opts)]
-         (loop [c (.read r)]
-           (if (neg? c)
-             (str sb)
-             (do
-               (.append sb (char c))
-               (recur (.read r)))))))))
+         (jio/copy r sw)
+         (str sw)))))
 
 (defn spit
   "Opposite of slurp.  Opens f with writer, writes content, then
@@ -5941,7 +5937,7 @@
                        :minor       (Integer/valueOf ^String (prop "minor"))
                        :incremental (Integer/valueOf ^String (prop "incremental"))
                        :qualifier   (prop "qualifier")}]
-  (def *clojure-version* 
+  (def ^:dynamic *clojure-version* 
     (if (not (= (prop "interim") "false"))
       (clojure.lang.RT/assoc clojure-version :interim true)
       clojure-version)))

@@ -28,6 +28,22 @@ public TBox(Thread t, Object val){
 }
 }
 
+static public class Unbound extends AFn{
+	final public Var v;
+
+	public Unbound(Var v){
+		this.v = v;
+	}
+
+	public String toString(){
+		return "Unbound: " + v;
+	}
+
+	public Object throwArity(int n){
+		throw new IllegalStateException("Attempting to call unbound fn: " + v);
+	}
+}
+
 static class Frame{
 	//Var->TBox
 	Associative bindings;
@@ -47,12 +63,14 @@ static class Frame{
 	}
 }
 
-static ThreadLocal<Frame> dvals = new ThreadLocal<Frame>(){
+static final ThreadLocal<Frame> dvals = new ThreadLocal<Frame>(){
 
 	protected Frame initialValue(){
 		return new Frame();
 	}
 };
+
+static public volatile int rev = 0;
 
 static Keyword privateKey = Keyword.intern(null, "private");
 static IPersistentMap privateMeta = new PersistentArrayMap(new Object[]{privateKey, Boolean.TRUE});
@@ -61,7 +79,9 @@ static Keyword nameKey = Keyword.intern(null, "name");
 static Keyword nsKey = Keyword.intern(null, "ns");
 //static Keyword tagKey = Keyword.intern(null, "tag");
 
-volatile Object root;
+private volatile Object root;
+
+volatile boolean dynamic = false;
 transient final AtomicBoolean threadBound;
 public final Symbol sym;
 public final Namespace ns;
@@ -77,6 +97,20 @@ public static Object getThreadBindingFrame(){
 
 public static void resetThreadBindingFrame(Object frame){
 	dvals.set((Frame) frame);
+}
+
+public Var setDynamic(){
+	this.dynamic = true;
+	return this;
+}
+
+public Var setDynamic(boolean b){
+	this.dynamic = b;
+	return this;
+}
+
+public final boolean isDynamic(){
+	return dynamic;
 }
 
 public static Var intern(Namespace ns, Symbol sym, Object root){
@@ -135,13 +169,14 @@ Var(Namespace ns, Symbol sym){
 	this.ns = ns;
 	this.sym = sym;
 	this.threadBound = new AtomicBoolean(false);
-	this.root = dvals;  //use dvals as magic not-bound value
+	this.root = new Unbound(this);
 	setMeta(PersistentHashMap.EMPTY);
 }
 
 Var(Namespace ns, Symbol sym, Object root){
 	this(ns, sym);
 	this.root = root;
+	++rev;
 }
 
 public boolean isBound(){
@@ -149,7 +184,7 @@ public boolean isBound(){
 }
 
 final public Object get(){
-	if(!threadBound.get() && root != dvals)
+	if(!threadBound.get())
 		return root;
 	return deref();
 }
@@ -158,14 +193,12 @@ final public Object deref(){
 	TBox b = getThreadBinding();
 	if(b != null)
 		return b.val;
-	if(hasRoot())
-		return root;
-	throw new IllegalStateException(String.format("Var %s/%s is unbound.", ns, sym));
+	return root;
 }
 
 public void setValidator(IFn vf){
 	if(hasRoot())
-		validate(vf, getRoot());
+		validate(vf, root);
 	validator = vf;
 }
 
@@ -223,13 +256,7 @@ public boolean isPublic(){
 	return !RT.booleanCast(meta().valAt(privateKey));
 }
 
-public Object getRoot(){
-	if(hasRoot())
-		return root;
-	throw new IllegalStateException(String.format("Var %s/%s is unbound.", ns, sym));
-}
-
-public Object getRawRoot(){
+final public Object getRawRoot(){
 		return root;
 }
 
@@ -249,14 +276,15 @@ public void setTag(Symbol tag) {
 }
 
 final public boolean hasRoot(){
-	return root != dvals;
+	return !(root instanceof Unbound);
 }
 
 //binding root always clears macro flag
 synchronized public void bindRoot(Object root){
 	validate(getValidator(), root);
-	Object oldroot = hasRoot()?this.root:null;
+	Object oldroot = this.root;
 	this.root = root;
+	++rev;
     try
         {
         alterMeta(dissoc, RT.list(macroKey));
@@ -270,28 +298,32 @@ synchronized public void bindRoot(Object root){
 
 synchronized void swapRoot(Object root){
 	validate(getValidator(), root);
-	Object oldroot = hasRoot()?this.root:null;
+	Object oldroot = this.root;
 	this.root = root;
+	++rev;
     notifyWatches(oldroot,root);
 }
 
 synchronized public void unbindRoot(){
-	this.root = dvals;
+	this.root = new Unbound(this);
+	++rev;
 }
 
 synchronized public void commuteRoot(IFn fn) throws Exception{
 	Object newRoot = fn.invoke(root);
 	validate(getValidator(), newRoot);
-	Object oldroot = getRoot();
+	Object oldroot = root;
 	this.root = newRoot;
+	++rev;
     notifyWatches(oldroot,newRoot);
 }
 
 synchronized public Object alterRoot(IFn fn, ISeq args) throws Exception{
 	Object newRoot = fn.applyTo(RT.cons(root, args));
 	validate(getValidator(), newRoot);
-	Object oldroot = getRoot();
+	Object oldroot = root;
 	this.root = newRoot;
+	++rev;
     notifyWatches(oldroot,newRoot);
 	return newRoot;
 }
@@ -303,6 +335,8 @@ public static void pushThreadBindings(Associative bindings){
 		{
 		IMapEntry e = (IMapEntry) bs.first();
 		Var v = (Var) e.key();
+		if(!v.dynamic)
+			throw new IllegalStateException(String.format("Can't dynamically bind non-dynamic var: %s/%s", v.ns, v.sym));
 		v.validate(v.getValidator(), e.val());
 		v.threadBound.set(true);
 		bmap = bmap.assoc(v, new TBox(Thread.currentThread(), e.val()));
